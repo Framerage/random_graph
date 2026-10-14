@@ -192,6 +192,11 @@ $font: 'JetBrains Mono', 'Fira Code', ui-monospace, Menlo, Consolas, monospace;
   gap: 10px;
 }
 
+.panelActions {
+  display: flex;
+  gap: 8px;
+}
+
 .user {
   font-size: 12px;
   color: $muted;

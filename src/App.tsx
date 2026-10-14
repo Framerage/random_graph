@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useReducer, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from 'react';
 import type { FormEvent } from 'react';
 import { QueryClient, QueryClientProvider, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -178,7 +178,13 @@ const MAX_DEPTH = 9; // 2^9 = 512 листьев максимум — граф �
 
 type TreeNode = { id: string; depth: number; children: string[]; side?: 'X' | 'Y' };
 type TreeState = { nodes: Record<string, TreeNode>; nextId: number };
-type TreeAction = { type: 'expand'; id: string } | { type: 'reset' };
+type TreeAction =
+  | { type: 'expand'; id: string }
+  | { type: 'reset' }
+  | { type: 'expandMany'; ids: string[] };
+
+/** Пауза между отрисовкой строк при Random, мс. */
+const ROW_DELAY = 1000;
 
 const ROOT_ID = 'n0';
 
@@ -187,10 +193,9 @@ const createInitialTree = (): TreeState => ({
   nextId: 1,
 });
 
-function treeReducer(state: TreeState, action: TreeAction): TreeState {
-  if (action.type === 'reset') return createInitialTree();
-
-  const target = state.nodes[action.id];
+/** Раскрывает лист: добавляет ему двух детей X и Y. Возвращает исходное состояние, если раскрыть нельзя. */
+function expandNode(state: TreeState, id: string): TreeState {
+  const target = state.nodes[id];
   // Раскрываем только листья и только до максимальной глубины
   if (!target || target.children.length > 0 || target.depth >= MAX_DEPTH) return state;
 
@@ -207,6 +212,61 @@ function treeReducer(state: TreeState, action: TreeAction): TreeState {
       [rightId]: { id: rightId, depth, children: [], side: 'Y' },
     },
   };
+}
+
+/** Случайное целое от min до max включительно. */
+const randomInt = (min: number, max: number) => min + Math.floor(Math.random() * (max - min + 1));
+
+/** Перемешивание Фишера — Йетса, возвращает новый массив. */
+function shuffle<T>(items: T[]): T[] {
+  const result = [...items];
+  for (let i = result.length - 1; i > 0; i--) {
+    const j = randomInt(0, i);
+    [result[i], result[j]] = [result[j], result[i]];
+  }
+  return result;
+}
+
+/**
+ * Строит план случайного дерева: для каждой строки список id узлов, которые надо раскрыть.
+ * На каждой строке выбираем, сколько узлов активировать: от 1 до числа узлов в строке.
+ * Затем берём столько разных случайных узлов. Их дети образуют следующую строку.
+ *
+ * id детей детерминированы порядком раскрытия, поэтому план, проигранный по шагам
+ * на чистом дереве, даст ровно те же id, что и здесь при симуляции.
+ */
+function createRandomPlan(): string[][] {
+  let tree = createInitialTree();
+  let row = [ROOT_ID];
+  const plan: string[][] = [];
+
+  for (let depth = 0; depth < MAX_DEPTH && row.length > 0; depth++) {
+    const activeCount = randomInt(1, row.length);
+    const pickedSet = new Set(shuffle(row).slice(0, activeCount));
+    // Идём по строке слева направо, чтобы новые id тоже шли слева направо
+    const picked = row.filter((id) => pickedSet.has(id));
+
+    const nextRow: string[] = [];
+    for (const id of picked) {
+      tree = expandNode(tree, id);
+      nextRow.push(...tree.nodes[id].children);
+    }
+    plan.push(picked);
+    row = nextRow;
+  }
+
+  return plan;
+}
+
+function treeReducer(state: TreeState, action: TreeAction): TreeState {
+  switch (action.type) {
+    case 'reset':
+      return createInitialTree();
+    case 'expand':
+      return expandNode(state, action.id);
+    case 'expandMany':
+      return action.ids.reduce(expandNode, state);
+  }
 }
 
 type OrbData = { label: string; leaf: boolean; root: boolean; maxed: boolean };
@@ -304,9 +364,47 @@ function MapCanvas() {
     return () => clearTimeout(timer);
   }, [graph, fitView]);
 
-  const handleNodeClick = useCallback((_: unknown, node: Node) => {
-    dispatch({ type: 'expand', id: node.id });
+  // Таймеры анимации Random и флаг, что она идёт
+  const timersRef = useRef<number[]>([]);
+  const [isAnimating, setIsAnimating] = useState(false);
+
+  const stopAnimation = useCallback(() => {
+    timersRef.current.forEach(clearTimeout);
+    timersRef.current = [];
+    setIsAnimating(false);
   }, []);
+
+  // Чистим таймеры при уходе со страницы
+  useEffect(() => stopAnimation, [stopAnimation]);
+
+  const handleRandom = useCallback(() => {
+    stopAnimation();
+    dispatch({ type: 'reset' });
+
+    // План считается заранее, а строки дорисовываются по одной с паузой
+    const plan = createRandomPlan();
+    setIsAnimating(true);
+    timersRef.current = plan.map((ids, index) =>
+      window.setTimeout(() => {
+        dispatch({ type: 'expandMany', ids });
+        if (index === plan.length - 1) setIsAnimating(false);
+      }, (index + 1) * ROW_DELAY),
+    );
+  }, [stopAnimation]);
+
+  const handleReset = useCallback(() => {
+    stopAnimation();
+    dispatch({ type: 'reset' });
+  }, [stopAnimation]);
+
+  const handleNodeClick = useCallback(
+    (_: unknown, node: Node) => {
+      // Во время анимации клики блокируем: ручное раскрытие сдвинуло бы id и сломало план
+      if (isAnimating) return;
+      dispatch({ type: 'expand', id: node.id });
+    },
+    [isAnimating],
+  );
 
   const depthMax = Math.max(...Object.values(tree.nodes).map((n) => n.depth));
 
@@ -335,8 +433,12 @@ function MapCanvas() {
           глубина: <b>{depthMax}</b> / {MAX_DEPTH}
         </div>
       </Panel>
-      <Panel position="top-right">
-        <button className={`${styles.btn} ${styles.btnGhost}`} onClick={() => dispatch({ type: 'reset' })}>
+      <Panel position="top-right" className={styles.panelActions}>
+        {/* Повторное нажатие во время отрисовки начинает новое дерево */}
+        <button className={styles.btn} onClick={handleRandom}>
+          {isAnimating ? 'Рисую...' : 'Random'}
+        </button>
+        <button className={`${styles.btn} ${styles.btnGhost}`} onClick={handleReset}>
           Сбросить
         </button>
       </Panel>
