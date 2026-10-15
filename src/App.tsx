@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from 'react';
-import type { FormEvent } from 'react';
+import type { CSSProperties, FormEvent } from 'react';
 import { QueryClient, QueryClientProvider, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Background,
@@ -10,9 +10,10 @@ import {
   Position,
   ReactFlow,
   ReactFlowProvider,
+  getSmoothStepPath,
   useReactFlow,
 } from '@xyflow/react';
-import type { Edge, Node, NodeProps, NodeTypes } from '@xyflow/react';
+import type { Edge, EdgeProps, EdgeTypes, Node, NodeProps, NodeTypes } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import styles from './app.module.scss';
 
@@ -176,25 +177,29 @@ const GAP_X = 84;
 const GAP_Y = 110;
 const MAX_DEPTH = 9; // 2^9 = 512 листьев максимум — граф остаётся лёгким
 
-type TreeNode = { id: string; depth: number; children: string[]; side?: 'X' | 'Y' };
+/** bornAt — момент появления узла (performance.now()), от него считается анимация роста ветки. */
+type TreeNode = { id: string; depth: number; children: string[]; side?: 'X' | 'Y'; bornAt: number };
 type TreeState = { nodes: Record<string, TreeNode>; nextId: number };
 type TreeAction =
-  | { type: 'expand'; id: string }
+  | { type: 'expand'; id: string; at: number }
   | { type: 'reset' }
-  | { type: 'expandMany'; ids: string[] };
+  | { type: 'expandMany'; ids: string[]; at: number };
 
-/** Пауза между отрисовкой строк при Random, мс. */
+/** Сколько растёт ветка к новому узлу, мс. Строки при Random идут одна за другой с тем же шагом. */
 const ROW_DELAY = 1000;
+/** Сколько «проявляется» узел, когда до него дотянулась ветка, мс. */
+const NODE_APPEAR = 250;
 
 const ROOT_ID = 'n0';
 
 const createInitialTree = (): TreeState => ({
-  nodes: { [ROOT_ID]: { id: ROOT_ID, depth: 0, children: [] } },
+  // Корень существовал «всегда» — его не анимируем
+  nodes: { [ROOT_ID]: { id: ROOT_ID, depth: 0, children: [], bornAt: -Infinity } },
   nextId: 1,
 });
 
 /** Раскрывает лист: добавляет ему двух детей X и Y. Возвращает исходное состояние, если раскрыть нельзя. */
-function expandNode(state: TreeState, id: string): TreeState {
+function expandNode(state: TreeState, id: string, bornAt: number): TreeState {
   const target = state.nodes[id];
   // Раскрываем только листья и только до максимальной глубины
   if (!target || target.children.length > 0 || target.depth >= MAX_DEPTH) return state;
@@ -208,8 +213,8 @@ function expandNode(state: TreeState, id: string): TreeState {
     nodes: {
       ...state.nodes,
       [target.id]: { ...target, children: [leftId, rightId] },
-      [leftId]: { id: leftId, depth, children: [], side: 'X' },
-      [rightId]: { id: rightId, depth, children: [], side: 'Y' },
+      [leftId]: { id: leftId, depth, children: [], side: 'X', bornAt },
+      [rightId]: { id: rightId, depth, children: [], side: 'Y', bornAt },
     },
   };
 }
@@ -248,7 +253,7 @@ function createRandomPlan(): string[][] {
 
     const nextRow: string[] = [];
     for (const id of picked) {
-      tree = expandNode(tree, id);
+      tree = expandNode(tree, id, 0);
       nextRow.push(...tree.nodes[id].children);
     }
     plan.push(picked);
@@ -263,17 +268,19 @@ function treeReducer(state: TreeState, action: TreeAction): TreeState {
     case 'reset':
       return createInitialTree();
     case 'expand':
-      return expandNode(state, action.id);
+      return expandNode(state, action.id, action.at);
     case 'expandMany':
-      return action.ids.reduce(expandNode, state);
+      return action.ids.reduce((tree, id) => expandNode(tree, id, action.at), state);
   }
 }
 
-type OrbData = { label: string; leaf: boolean; root: boolean; maxed: boolean };
+type OrbData = { label: string; leaf: boolean; root: boolean; maxed: boolean; bornAt: number };
 type OrbNode = Node<OrbData, 'orb'>;
+type GrowEdgeData = { bornAt: number };
+type GrowEdge = Edge<GrowEdgeData, 'grow'>;
 
 /** Классическая раскладка дерева: листья по порядку слева направо, родитель — над центром детей. */
-function buildGraph(tree: TreeState): { nodes: OrbNode[]; edges: Edge[] } {
+function buildGraph(tree: TreeState): { nodes: OrbNode[]; edges: GrowEdge[] } {
   const xs: Record<string, number> = {};
   let leafIndex = 0;
 
@@ -292,7 +299,7 @@ function buildGraph(tree: TreeState): { nodes: OrbNode[]; edges: Edge[] } {
   walk(ROOT_ID);
 
   const nodes: OrbNode[] = [];
-  const edges: Edge[] = [];
+  const edges: GrowEdge[] = [];
 
   for (const node of Object.values(tree.nodes)) {
     const leaf = node.children.length === 0;
@@ -307,6 +314,7 @@ function buildGraph(tree: TreeState): { nodes: OrbNode[]; edges: Edge[] } {
         leaf,
         root: node.id === ROOT_ID,
         maxed: leaf && node.depth >= MAX_DEPTH,
+        bornAt: node.bornAt,
       },
     });
     for (const childId of node.children) {
@@ -314,8 +322,8 @@ function buildGraph(tree: TreeState): { nodes: OrbNode[]; edges: Edge[] } {
         id: `e-${node.id}-${childId}`,
         source: node.id,
         target: childId,
-        type: 'smoothstep',
-        style: { stroke: '#2a7f8e', strokeWidth: 1.5 },
+        type: 'grow',
+        data: { bornAt: tree.nodes[childId].bornAt },
       });
     }
   }
@@ -324,12 +332,30 @@ function buildGraph(tree: TreeState): { nodes: OrbNode[]; edges: Edge[] } {
 }
 
 /* ========================================================================
- * Кастомный узел
+ * Кастомные узел и ветка
  * ===================================================================== */
 
+/**
+ * Стиль анимации, «замороженный» на момент монтирования.
+ * Узлы и ветки перемонтируются (onlyRenderVisibleElements, панорамирование),
+ * поэтому анимация не стартует с нуля, а продолжается с того места, где должна быть
+ * по bornAt. Если она уже закончилась — просто выключаем её.
+ */
+function useGrowStyle(bornAt: number, delay: number, duration: number): CSSProperties {
+  const [style] = useState<CSSProperties>(() => {
+    const elapsed = performance.now() - bornAt;
+    if (elapsed >= delay + duration) return { animation: 'none' };
+    return { animationDelay: `${delay - elapsed}ms`, animationDuration: `${duration}ms` };
+  });
+  return style;
+}
+
 function OrbNodeView({ data }: NodeProps<OrbNode>) {
+  // Узел проявляется, когда до него дотянулась ветка
+  const growStyle = useGrowStyle(data.bornAt, ROW_DELAY, NODE_APPEAR);
   const className = [
     styles.orb,
+    styles.orbAppear,
     data.leaf && styles.orbLeaf,
     data.root && styles.orbRoot,
     data.maxed && styles.orbMax,
@@ -338,7 +364,7 @@ function OrbNodeView({ data }: NodeProps<OrbNode>) {
     .join(' ');
 
   return (
-    <div className={className}>
+    <div className={className} style={growStyle}>
       <Handle type="target" position={Position.Top} isConnectable={false} />
       <span>{data.label}</span>
       <Handle type="source" position={Position.Bottom} isConnectable={false} />
@@ -346,8 +372,25 @@ function OrbNodeView({ data }: NodeProps<OrbNode>) {
   );
 }
 
+/** Ветка, которая «прорастает» от родителя к ребёнку за ROW_DELAY. */
+function GrowEdgeView({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, data }: EdgeProps<GrowEdge>) {
+  const growStyle = useGrowStyle(data?.bornAt ?? -Infinity, 0, ROW_DELAY);
+  const [path] = getSmoothStepPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition });
+
+  // pathLength=1 нормирует длину пути: dash-анимация не зависит от реальной длины ветки
+  return (
+    <path
+      className={`react-flow__edge-path ${styles.growEdge}`}
+      d={path}
+      pathLength={1}
+      style={{ stroke: '#2a7f8e', strokeWidth: 1.5, ...growStyle }}
+    />
+  );
+}
+
 // Объявлено вне компонента, чтобы ссылка была стабильной
 const nodeTypes: NodeTypes = { orb: OrbNodeView };
+const edgeTypes: EdgeTypes = { grow: GrowEdgeView };
 
 /* ========================================================================
  * Страница карты
@@ -381,15 +424,16 @@ function MapCanvas() {
     stopAnimation();
     dispatch({ type: 'reset' });
 
-    // План считается заранее, а строки дорисовываются по одной с паузой
+    // План считается заранее, а строки дорисовываются по одной: ветки строки растут
+    // ROW_DELAY мс, и как только они дотянулись до детей, начинает расти следующая строка.
+    // Первая строка тоже идёт через таймер, чтобы сброс успел отрисоваться отдельно
+    // и узлы с теми же id смонтировались заново (иначе анимация не запустится).
     const plan = createRandomPlan();
     setIsAnimating(true);
     timersRef.current = plan.map((ids, index) =>
-      window.setTimeout(() => {
-        dispatch({ type: 'expandMany', ids });
-        if (index === plan.length - 1) setIsAnimating(false);
-      }, (index + 1) * ROW_DELAY),
+      window.setTimeout(() => dispatch({ type: 'expandMany', ids, at: performance.now() }), index * ROW_DELAY),
     );
+    timersRef.current.push(window.setTimeout(() => setIsAnimating(false), plan.length * ROW_DELAY));
   }, [stopAnimation]);
 
   const handleReset = useCallback(() => {
@@ -401,7 +445,7 @@ function MapCanvas() {
     (_: unknown, node: Node) => {
       // Во время анимации клики блокируем: ручное раскрытие сдвинуло бы id и сломало план
       if (isAnimating) return;
-      dispatch({ type: 'expand', id: node.id });
+      dispatch({ type: 'expand', id: node.id, at: performance.now() });
     },
     [isAnimating],
   );
@@ -415,6 +459,7 @@ function MapCanvas() {
       nodes={graph.nodes}
       edges={graph.edges}
       nodeTypes={nodeTypes}
+      edgeTypes={edgeTypes}
       onNodeClick={handleNodeClick}
       nodesDraggable={false}
       nodesConnectable={false}
