@@ -16,6 +16,8 @@ import {
 import type { Edge, EdgeProps, EdgeTypes, Node, NodeProps, NodeTypes } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import styles from './app.module.scss';
+import { isMuted, playRow, setMuted, unlockAudio } from './sound';
+import type { SoundNote } from './sound';
 
 /* ========================================================================
  * Auth (фейковый API + TanStack Query)
@@ -177,8 +179,11 @@ const GAP_X = 84;
 const GAP_Y = 110;
 const MAX_DEPTH = 9; // 2^9 = 512 листьев максимум — граф остаётся лёгким
 
-/** bornAt — момент появления узла (performance.now()), от него считается анимация роста ветки. */
-type TreeNode = { id: string; depth: number; children: string[]; side?: 'X' | 'Y'; bornAt: number };
+/**
+ * bornAt — момент появления узла (performance.now()), от него считается анимация роста ветки.
+ * pitch — ступень лада: у корня 0, ветка X — шаг вниз, ветка Y — шаг вверх.
+ */
+type TreeNode = { id: string; depth: number; children: string[]; side?: 'X' | 'Y'; bornAt: number; pitch: number };
 type TreeState = { nodes: Record<string, TreeNode>; nextId: number };
 type TreeAction =
   | { type: 'expand'; id: string; at: number }
@@ -186,7 +191,7 @@ type TreeAction =
   | { type: 'expandMany'; ids: string[]; at: number };
 
 /** Сколько растёт ветка к новому узлу, мс. Строки при Random идут одна за другой с тем же шагом. */
-const ROW_DELAY = 1000;
+const ROW_DELAY = 500;
 /** Сколько «проявляется» узел, когда до него дотянулась ветка, мс. */
 const NODE_APPEAR = 250;
 
@@ -194,7 +199,7 @@ const ROOT_ID = 'n0';
 
 const createInitialTree = (): TreeState => ({
   // Корень существовал «всегда» — его не анимируем
-  nodes: { [ROOT_ID]: { id: ROOT_ID, depth: 0, children: [], bornAt: -Infinity } },
+  nodes: { [ROOT_ID]: { id: ROOT_ID, depth: 0, children: [], bornAt: -Infinity, pitch: 0 } },
   nextId: 1,
 });
 
@@ -213,8 +218,8 @@ function expandNode(state: TreeState, id: string, bornAt: number): TreeState {
     nodes: {
       ...state.nodes,
       [target.id]: { ...target, children: [leftId, rightId] },
-      [leftId]: { id: leftId, depth, children: [], side: 'X', bornAt },
-      [rightId]: { id: rightId, depth, children: [], side: 'Y', bornAt },
+      [leftId]: { id: leftId, depth, children: [], side: 'X', bornAt, pitch: target.pitch - 1 },
+      [rightId]: { id: rightId, depth, children: [], side: 'Y', bornAt, pitch: target.pitch + 1 },
     },
   };
 }
@@ -257,6 +262,35 @@ function createRandomPlan(): string[][] {
       nextRow.push(...tree.nodes[id].children);
     }
     plan.push(picked);
+    row = nextRow;
+  }
+
+  return plan;
+}
+
+/**
+ * Превращает готовое дерево обратно в план по строкам, чтобы его можно было проиграть заново.
+ * У дерева, собранного кликами, id идут в порядке кликов, а план раскрывает строку за строкой,
+ * поэтому id пересчитываем так, как их выдаст проигрывание на чистом дереве.
+ */
+function planFromTree(source: TreeState): string[][] {
+  let tree = createInitialTree();
+  const idMap: Record<string, string> = { [ROOT_ID]: ROOT_ID };
+  let row = [ROOT_ID]; // id исходного дерева, слева направо
+  const plan: string[][] = [];
+
+  while (row.length > 0) {
+    const picked = row.filter((id) => source.nodes[id].children.length > 0);
+    if (picked.length === 0) break;
+
+    const nextRow: string[] = [];
+    for (const id of picked) {
+      tree = expandNode(tree, idMap[id], 0);
+      const children = source.nodes[id].children;
+      tree.nodes[idMap[id]].children.forEach((newId, i) => (idMap[children[i]] = newId));
+      nextRow.push(...children);
+    }
+    plan.push(picked.map((id) => idMap[id]));
     row = nextRow;
   }
 
@@ -329,6 +363,17 @@ function buildGraph(tree: TreeState): { nodes: OrbNode[]; edges: GrowEdge[] } {
   }
 
   return { nodes, edges };
+}
+
+/** Ноты дерева по строкам: строка d звучит, когда проявляются узлы глубины d. Внутри строки — слева направо. */
+function soundRows(tree: TreeState): SoundNote[][] {
+  const rows: SoundNote[][] = [];
+  const sorted = [...buildGraph(tree).nodes].sort((a, b) => a.position.x - b.position.x);
+  for (const node of sorted) {
+    const { pitch, depth } = tree.nodes[node.id];
+    (rows[depth] ??= []).push({ pitch, depth, accent: node.data.maxed });
+  }
+  return rows;
 }
 
 /* ========================================================================
@@ -420,7 +465,8 @@ function MapCanvas() {
   // Чистим таймеры при уходе со страницы
   useEffect(() => stopAnimation, [stopAnimation]);
 
-  const handleRandom = useCallback(() => {
+  /** Сбрасывает дерево и проигрывает план с нуля: анимация роста + звук. */
+  const playPlan = useCallback((plan: string[][]) => {
     stopAnimation();
     dispatch({ type: 'reset' });
 
@@ -428,13 +474,26 @@ function MapCanvas() {
     // ROW_DELAY мс, и как только они дотянулись до детей, начинает расти следующая строка.
     // Первая строка тоже идёт через таймер, чтобы сброс успел отрисоваться отдельно
     // и узлы с теми же id смонтировались заново (иначе анимация не запустится).
-    const plan = createRandomPlan();
+    // Итоговое дерево известно заранее — по нему раскладываем ноты по строкам
+    const rows = soundRows(
+      plan.reduce((tree, ids) => treeReducer(tree, { type: 'expandMany', ids, at: 0 }), createInitialTree()),
+    );
+    unlockAudio();
     setIsAnimating(true);
     timersRef.current = plan.map((ids, index) =>
       window.setTimeout(() => dispatch({ type: 'expandMany', ids, at: performance.now() }), index * ROW_DELAY),
     );
+    // Узлы глубины d проявляются ровно в d * ROW_DELAY — в этот момент и звучит их строка
+    rows.forEach((notes, depth) =>
+      timersRef.current.push(window.setTimeout(() => playRow(notes), depth * ROW_DELAY)),
+    );
     timersRef.current.push(window.setTimeout(() => setIsAnimating(false), plan.length * ROW_DELAY));
   }, [stopAnimation]);
+
+  const handleRandom = useCallback(() => playPlan(createRandomPlan()), [playPlan]);
+
+  // Переигрывает то дерево, что сейчас на экране, — и случайное, и собранное кликами
+  const handleReplay = useCallback(() => playPlan(planFromTree(tree)), [playPlan, tree]);
 
   const handleReset = useCallback(() => {
     stopAnimation();
@@ -445,10 +504,20 @@ function MapCanvas() {
     (_: unknown, node: Node) => {
       // Во время анимации клики блокируем: ручное раскрытие сдвинуло бы id и сломало план
       if (isAnimating) return;
+      const clicked = tree.nodes[node.id];
+      unlockAudio();
+      playRow([{ pitch: clicked.pitch, depth: clicked.depth }]);
       dispatch({ type: 'expand', id: node.id, at: performance.now() });
     },
-    [isAnimating],
+    [isAnimating, tree],
   );
+
+  // Состояние кнопки берём из модуля звука: он живёт дольше компонента (например, после выхода и входа)
+  const [soundOn, setSoundOn] = useState(() => !isMuted());
+  const toggleSound = () => {
+    setMuted(soundOn);
+    setSoundOn(!soundOn);
+  };
 
   const depthMax = Math.max(...Object.values(tree.nodes).map((n) => n.depth));
 
@@ -483,8 +552,22 @@ function MapCanvas() {
         <button className={styles.btn} onClick={handleRandom}>
           {isAnimating ? 'Рисую...' : 'Random'}
         </button>
+        <button
+          className={`${styles.btn} ${styles.btnGhost}`}
+          onClick={handleReplay}
+          disabled={isAnimating || tree.nodes[ROOT_ID].children.length === 0}
+        >
+          Переиграть
+        </button>
         <button className={`${styles.btn} ${styles.btnGhost}`} onClick={handleReset}>
           Сбросить
+        </button>
+        <button
+          className={`${styles.btn} ${styles.btnGhost}`}
+          onClick={toggleSound}
+          title={soundOn ? 'Выключить звук' : 'Включить звук'}
+        >
+          {soundOn ? '🔊' : '🔇'}
         </button>
       </Panel>
     </ReactFlow>
