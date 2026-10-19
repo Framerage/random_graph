@@ -175,22 +175,47 @@ function LoginPage() {
  * ===================================================================== */
 
 const NODE_SIZE = 56;
-const GAP_X = 84;
-const GAP_Y = 110;
-const MAX_DEPTH = 9; // 2^9 = 512 листьев максимум — граф остаётся лёгким
+/** Расстояние между столбцами (уровнями дерева). */
+const GAP_X = 130;
+/** Расстояние между узлами внутри столбца. */
+const GAP_Y = 84;
+const MAX_DEPTH = 30;
+/**
+ * Сколько столбцов видно и хранится в памяти. Когда появляется новый столбец сверх лимита,
+ * самый левый гаснет, а следующий за ним удаляется из состояния насовсем.
+ */
+const VISIBLE_COLUMNS = 10;
+/** Сколько узлов помещается в один столбец. Дети появляются парами, поэтому раскрыть в столбце можно не больше двух узлов. */
+const MAX_PER_COLUMN = 4;
 
 /**
  * bornAt — момент появления узла (performance.now()), от него считается анимация роста ветки.
  * pitch — ступень лада: у корня 0, ветка X — шаг вниз, ветка Y — шаг вверх.
  */
 type TreeNode = { id: string; depth: number; children: string[]; side?: 'X' | 'Y'; bornAt: number; pitch: number };
-type TreeState = { nodes: Record<string, TreeNode>; nextId: number };
+/** Одно раскрытие: какой узел раскрыли и какие id получили его дети. */
+type PlanStep = { id: string; children: [string, string] };
+/** План роста по столбцам: plan[d] — раскрытия узлов глубины d. */
+type Plan = PlanStep[][];
+/**
+ * head — самый левый хранимый столбец по порядку сверху вниз. Его родителей уже нет в памяти,
+ * поэтому порядок нельзя вывести из дерева и мы его запоминаем.
+ * firstDepth — глубина первого видимого столбца. Столбец перед ним (если есть) — уходящий: он гаснет.
+ * log — история раскрытий для «Переиграть». Ноды из неё не восстанавливаются, это только id: два шага на столбец.
+ */
+type TreeState = {
+  nodes: Record<string, TreeNode>;
+  nextId: number;
+  head: string[];
+  firstDepth: number;
+  log: Plan;
+};
 type TreeAction =
   | { type: 'expand'; id: string; at: number }
   | { type: 'reset' }
-  | { type: 'expandMany'; ids: string[]; at: number };
+  | { type: 'expandMany'; steps: PlanStep[]; at: number };
 
-/** Сколько растёт ветка к новому узлу, мс. Строки при Random идут одна за другой с тем же шагом. */
+/** Сколько растёт ветка к новому узлу, мс. Столбцы при Random идут один за другим с тем же шагом. */
 const ROW_DELAY = 500;
 /** Сколько «проявляется» узел, когда до него дотянулась ветка, мс. */
 const NODE_APPEAR = 250;
@@ -201,27 +226,70 @@ const createInitialTree = (): TreeState => ({
   // Корень существовал «всегда» — его не анимируем
   nodes: { [ROOT_ID]: { id: ROOT_ID, depth: 0, children: [], bornAt: -Infinity, pitch: 0 } },
   nextId: 1,
+  head: [ROOT_ID],
+  firstDepth: 0,
+  log: [],
 });
 
-/** Раскрывает лист: добавляет ему двух детей X и Y. Возвращает исходное состояние, если раскрыть нельзя. */
-function expandNode(state: TreeState, id: string, bornAt: number): TreeState {
+/** Сколько узлов в каждом столбце: индекс — глубина. */
+function columnSizes(state: TreeState): number[] {
+  const sizes: number[] = [];
+  for (const node of Object.values(state.nodes)) sizes[node.depth] = (sizes[node.depth] ?? 0) + 1;
+  return sizes;
+}
+
+/** Можно ли раскрыть узел: это лист, глубина не максимальная и в следующем столбце есть место для двух детей. */
+function canExpand(state: TreeState, id: string, sizes = columnSizes(state)): boolean {
   const target = state.nodes[id];
-  // Раскрываем только листья и только до максимальной глубины
-  if (!target || target.children.length > 0 || target.depth >= MAX_DEPTH) return state;
+  if (!target || target.children.length > 0 || target.depth >= MAX_DEPTH) return false;
+  // Уходящий столбец раскрывать нельзя
+  if (target.depth < state.firstDepth) return false;
+  return (sizes[target.depth + 1] ?? 0) + 2 <= MAX_PER_COLUMN;
+}
 
-  const leftId = `n${state.nextId}`;
-  const rightId = `n${state.nextId + 1}`;
+/**
+ * Раскрывает лист: добавляет ему двух детей X и Y. Возвращает исходное состояние, если раскрыть нельзя.
+ * childIds передаются при проигрывании плана, чтобы id совпали с исходными.
+ */
+function expandNode(state: TreeState, id: string, bornAt: number, childIds?: [string, string]): TreeState {
+  if (!canExpand(state, id)) return state;
+  const target = state.nodes[id];
+
+  const [leftId, rightId] = childIds ?? [`n${state.nextId}`, `n${state.nextId + 1}`];
   const depth = target.depth + 1;
+  const log = [...state.log];
+  log[target.depth] = [...(log[target.depth] ?? []), { id, children: [leftId, rightId] }];
 
-  return {
+  return shiftWindow({
+    ...state,
     nextId: state.nextId + 2,
+    log,
     nodes: {
       ...state.nodes,
       [target.id]: { ...target, children: [leftId, rightId] },
       [leftId]: { id: leftId, depth, children: [], side: 'X', bornAt, pitch: target.pitch - 1 },
       [rightId]: { id: rightId, depth, children: [], side: 'Y', bornAt, pitch: target.pitch + 1 },
     },
-  };
+  });
+}
+
+/**
+ * Скользящее окно: если столбцов стало больше VISIBLE_COLUMNS, сдвигаем firstDepth.
+ * Столбец перед окном остаётся как уходящий (он плавно гаснет), всё, что левее, удаляется.
+ * Так в памяти не больше VISIBLE_COLUMNS + 1 столбца, то есть не больше 44 узлов.
+ */
+function shiftWindow(state: TreeState): TreeState {
+  const columns = treeColumns(state);
+  const lastDepth = state.nodes[columns[columns.length - 1][0]].depth;
+  const firstDepth = lastDepth - VISIBLE_COLUMNS + 1;
+  if (firstDepth <= state.firstDepth) return state;
+
+  const headDepth = state.nodes[state.head[0]].depth;
+  const kept = columns.slice(Math.max(firstDepth - 1 - headDepth, 0));
+  const nodes: Record<string, TreeNode> = {};
+  for (const id of kept.flat()) nodes[id] = state.nodes[id];
+
+  return { ...state, nodes, head: kept[0], firstDepth };
 }
 
 /** Случайное целое от min до max включительно. */
@@ -238,22 +306,20 @@ function shuffle<T>(items: T[]): T[] {
 }
 
 /**
- * Строит план случайного дерева: для каждой строки список id узлов, которые надо раскрыть.
- * На каждой строке выбираем, сколько узлов активировать: от 1 до числа узлов в строке.
- * Затем берём столько разных случайных узлов. Их дети образуют следующую строку.
- *
- * id детей детерминированы порядком раскрытия, поэтому план, проигранный по шагам
- * на чистом дереве, даст ровно те же id, что и здесь при симуляции.
+ * Строит план случайного дерева: для каждого столбца список раскрытий.
+ * В каждом столбце выбираем, сколько узлов активировать: от 1 до числа узлов в столбце,
+ * но не больше MAX_PER_COLUMN / 2, чтобы следующий столбец уместил всех детей.
+ * Затем берём столько разных случайных узлов. Их дети образуют следующий столбец.
+ * Дерево при этом симулируется целиком, с тем же скользящим окном, а план — это его log.
  */
-function createRandomPlan(): string[][] {
+function createRandomPlan(): Plan {
   let tree = createInitialTree();
   let row = [ROOT_ID];
-  const plan: string[][] = [];
 
   for (let depth = 0; depth < MAX_DEPTH && row.length > 0; depth++) {
-    const activeCount = randomInt(1, row.length);
+    const activeCount = randomInt(1, Math.min(row.length, MAX_PER_COLUMN / 2));
     const pickedSet = new Set(shuffle(row).slice(0, activeCount));
-    // Идём по строке слева направо, чтобы новые id тоже шли слева направо
+    // Идём по столбцу сверху вниз, чтобы новые id тоже шли сверху вниз
     const picked = row.filter((id) => pickedSet.has(id));
 
     const nextRow: string[] = [];
@@ -261,40 +327,10 @@ function createRandomPlan(): string[][] {
       tree = expandNode(tree, id, 0);
       nextRow.push(...tree.nodes[id].children);
     }
-    plan.push(picked);
     row = nextRow;
   }
 
-  return plan;
-}
-
-/**
- * Превращает готовое дерево обратно в план по строкам, чтобы его можно было проиграть заново.
- * У дерева, собранного кликами, id идут в порядке кликов, а план раскрывает строку за строкой,
- * поэтому id пересчитываем так, как их выдаст проигрывание на чистом дереве.
- */
-function planFromTree(source: TreeState): string[][] {
-  let tree = createInitialTree();
-  const idMap: Record<string, string> = { [ROOT_ID]: ROOT_ID };
-  let row = [ROOT_ID]; // id исходного дерева, слева направо
-  const plan: string[][] = [];
-
-  while (row.length > 0) {
-    const picked = row.filter((id) => source.nodes[id].children.length > 0);
-    if (picked.length === 0) break;
-
-    const nextRow: string[] = [];
-    for (const id of picked) {
-      tree = expandNode(tree, idMap[id], 0);
-      const children = source.nodes[id].children;
-      tree.nodes[idMap[id]].children.forEach((newId, i) => (idMap[children[i]] = newId));
-      nextRow.push(...children);
-    }
-    plan.push(picked.map((id) => idMap[id]));
-    row = nextRow;
-  }
-
-  return plan;
+  return tree.log;
 }
 
 function treeReducer(state: TreeState, action: TreeAction): TreeState {
@@ -304,60 +340,80 @@ function treeReducer(state: TreeState, action: TreeAction): TreeState {
     case 'expand':
       return expandNode(state, action.id, action.at);
     case 'expandMany':
-      return action.ids.reduce((tree, id) => expandNode(tree, id, action.at), state);
+      return action.steps.reduce((tree, step) => expandNode(tree, step.id, action.at, step.children), state);
   }
 }
 
-type OrbData = { label: string; leaf: boolean; root: boolean; maxed: boolean; bornAt: number };
+/**
+ * maxed — лист на максимальной глубине; blocked — лист, для детей которого нет места в следующем столбце;
+ * exiting — узел уходящего столбца, он гаснет и при следующем сдвиге окна удаляется.
+ */
+type OrbData = {
+  label: string;
+  leaf: boolean;
+  root: boolean;
+  maxed: boolean;
+  blocked: boolean;
+  exiting: boolean;
+  bornAt: number;
+};
 type OrbNode = Node<OrbData, 'orb'>;
-type GrowEdgeData = { bornAt: number };
+type GrowEdgeData = { bornAt: number; exiting: boolean };
 type GrowEdge = Edge<GrowEdgeData, 'grow'>;
 
-/** Классическая раскладка дерева: листья по порядку слева направо, родитель — над центром детей. */
+/**
+ * Хранимые столбцы дерева, каждый сверху вниз: обход в ширину от head. Дети идут в порядке
+ * своих родителей, поэтому ветки между соседними столбцами не пересекаются.
+ */
+function treeColumns(tree: TreeState): string[][] {
+  const columns: string[][] = [];
+  let column = tree.head;
+  while (column.length > 0) {
+    columns.push(column);
+    column = column.flatMap((id) => tree.nodes[id].children);
+  }
+  return columns;
+}
+
+/** Раскладка слева направо: столбец = уровень дерева, узлы столбца центрированы по вертикали. */
 function buildGraph(tree: TreeState): { nodes: OrbNode[]; edges: GrowEdge[] } {
-  const xs: Record<string, number> = {};
-  let leafIndex = 0;
-
-  const walk = (id: string): number => {
-    const node = tree.nodes[id];
-    let x: number;
-    if (node.children.length === 0) {
-      x = leafIndex++ * GAP_X;
-    } else {
-      const childXs = node.children.map(walk);
-      x = (childXs[0] + childXs[childXs.length - 1]) / 2;
-    }
-    xs[id] = x;
-    return x;
-  };
-  walk(ROOT_ID);
-
   const nodes: OrbNode[] = [];
   const edges: GrowEdge[] = [];
+  const sizes = columnSizes(tree);
+
+  treeColumns(tree).forEach((column) =>
+    column.forEach((id, index) => {
+      const node = tree.nodes[id];
+      const leaf = node.children.length === 0;
+      const maxed = leaf && node.depth >= MAX_DEPTH;
+      const exiting = node.depth < tree.firstDepth;
+      nodes.push({
+        id,
+        type: 'orb',
+        position: { x: node.depth * GAP_X, y: (index - (column.length - 1) / 2) * GAP_Y },
+        width: NODE_SIZE,
+        height: NODE_SIZE,
+        data: {
+          label: node.side ?? 'CORE',
+          leaf,
+          root: id === ROOT_ID,
+          maxed,
+          blocked: leaf && !maxed && !exiting && !canExpand(tree, id, sizes),
+          exiting,
+          bornAt: node.bornAt,
+        },
+      });
+    }),
+  );
 
   for (const node of Object.values(tree.nodes)) {
-    const leaf = node.children.length === 0;
-    nodes.push({
-      id: node.id,
-      type: 'orb',
-      position: { x: xs[node.id], y: node.depth * GAP_Y },
-      width: NODE_SIZE,
-      height: NODE_SIZE,
-      data: {
-        label: node.side ?? 'CORE',
-        leaf,
-        root: node.id === ROOT_ID,
-        maxed: leaf && node.depth >= MAX_DEPTH,
-        bornAt: node.bornAt,
-      },
-    });
     for (const childId of node.children) {
       edges.push({
         id: `e-${node.id}-${childId}`,
         source: node.id,
         target: childId,
         type: 'grow',
-        data: { bornAt: tree.nodes[childId].bornAt },
+        data: { bornAt: tree.nodes[childId].bornAt, exiting: node.depth < tree.firstDepth },
       });
     }
   }
@@ -365,15 +421,27 @@ function buildGraph(tree: TreeState): { nodes: OrbNode[]; edges: GrowEdge[] } {
   return { nodes, edges };
 }
 
-/** Ноты дерева по строкам: строка d звучит, когда проявляются узлы глубины d. Внутри строки — слева направо. */
-function soundRows(tree: TreeState): SoundNote[][] {
-  const rows: SoundNote[][] = [];
-  const sorted = [...buildGraph(tree).nodes].sort((a, b) => a.position.x - b.position.x);
-  for (const node of sorted) {
-    const { pitch, depth } = tree.nodes[node.id];
-    (rows[depth] ??= []).push({ pitch, depth, accent: node.data.maxed });
+/** Ноты одного столбца сверху вниз. */
+function columnNotes(tree: TreeState, column: string[]): SoundNote[] {
+  return column.map((id) => {
+    const { pitch, depth } = tree.nodes[id];
+    return { pitch, depth, accent: depth >= MAX_DEPTH };
+  });
+}
+
+/**
+ * Ноты плана по столбцам: столбец d звучит, когда проявляются узлы глубины d.
+ * Итоговое дерево помнит только последние столбцы, поэтому ноты снимаем по ходу симуляции:
+ * после каждого шага плана новый столбец — последний.
+ */
+function soundColumns(plan: Plan): SoundNote[][] {
+  let tree = createInitialTree();
+  const columns = [columnNotes(tree, tree.head)];
+  for (const steps of plan) {
+    tree = treeReducer(tree, { type: 'expandMany', steps, at: 0 });
+    columns.push(columnNotes(tree, treeColumns(tree).at(-1)!));
   }
-  return rows;
+  return columns;
 }
 
 /* ========================================================================
@@ -403,16 +471,17 @@ function OrbNodeView({ data }: NodeProps<OrbNode>) {
     styles.orbAppear,
     data.leaf && styles.orbLeaf,
     data.root && styles.orbRoot,
-    data.maxed && styles.orbMax,
+    (data.maxed || data.blocked) && styles.orbMax,
+    data.exiting && styles.orbExit,
   ]
     .filter(Boolean)
     .join(' ');
 
   return (
     <div className={className} style={growStyle}>
-      <Handle type="target" position={Position.Top} isConnectable={false} />
+      <Handle type="target" position={Position.Left} isConnectable={false} />
       <span>{data.label}</span>
-      <Handle type="source" position={Position.Bottom} isConnectable={false} />
+      <Handle type="source" position={Position.Right} isConnectable={false} />
     </div>
   );
 }
@@ -425,7 +494,7 @@ function GrowEdgeView({ sourceX, sourceY, targetX, targetY, sourcePosition, targ
   // pathLength=1 нормирует длину пути: dash-анимация не зависит от реальной длины ветки
   return (
     <path
-      className={`react-flow__edge-path ${styles.growEdge}`}
+      className={`react-flow__edge-path ${styles.growEdge} ${data?.exiting ? styles.edgeExit : ''}`}
       d={path}
       pathLength={1}
       style={{ stroke: '#2a7f8e', strokeWidth: 1.5, ...growStyle }}
@@ -446,9 +515,10 @@ function MapCanvas() {
   const { fitView } = useReactFlow();
   const graph = useMemo(() => buildGraph(tree), [tree]);
 
-  // После каждого изменения графа плавно вписываем его в экран
+  // После каждого изменения графа плавно вписываем в экран видимое окно (без уходящего столбца)
   useEffect(() => {
-    const timer = setTimeout(() => fitView({ duration: 300, padding: 0.25, maxZoom: 1.1 }), 40);
+    const visible = graph.nodes.filter((node) => !node.data.exiting);
+    const timer = setTimeout(() => fitView({ nodes: visible, duration: 300, padding: 0.25, maxZoom: 1.1 }), 40);
     return () => clearTimeout(timer);
   }, [graph, fitView]);
 
@@ -466,25 +536,23 @@ function MapCanvas() {
   useEffect(() => stopAnimation, [stopAnimation]);
 
   /** Сбрасывает дерево и проигрывает план с нуля: анимация роста + звук. */
-  const playPlan = useCallback((plan: string[][]) => {
+  const playPlan = useCallback((plan: Plan) => {
     stopAnimation();
     dispatch({ type: 'reset' });
 
-    // План считается заранее, а строки дорисовываются по одной: ветки строки растут
-    // ROW_DELAY мс, и как только они дотянулись до детей, начинает расти следующая строка.
-    // Первая строка тоже идёт через таймер, чтобы сброс успел отрисоваться отдельно
+    // План считается заранее, а столбцы дорисовываются по одному: ветки столбца растут
+    // ROW_DELAY мс, и как только они дотянулись до детей, начинает расти следующий столбец.
+    // Первый столбец тоже идёт через таймер, чтобы сброс успел отрисоваться отдельно
     // и узлы с теми же id смонтировались заново (иначе анимация не запустится).
-    // Итоговое дерево известно заранее — по нему раскладываем ноты по строкам
-    const rows = soundRows(
-      plan.reduce((tree, ids) => treeReducer(tree, { type: 'expandMany', ids, at: 0 }), createInitialTree()),
-    );
+    // План известен заранее — по нему раскладываем ноты по столбцам
+    const columns = soundColumns(plan);
     unlockAudio();
     setIsAnimating(true);
-    timersRef.current = plan.map((ids, index) =>
-      window.setTimeout(() => dispatch({ type: 'expandMany', ids, at: performance.now() }), index * ROW_DELAY),
+    timersRef.current = plan.map((steps, index) =>
+      window.setTimeout(() => dispatch({ type: 'expandMany', steps, at: performance.now() }), index * ROW_DELAY),
     );
-    // Узлы глубины d проявляются ровно в d * ROW_DELAY — в этот момент и звучит их строка
-    rows.forEach((notes, depth) =>
+    // Узлы глубины d проявляются ровно в d * ROW_DELAY — в этот момент и звучит их столбец
+    columns.forEach((notes, depth) =>
       timersRef.current.push(window.setTimeout(() => playRow(notes), depth * ROW_DELAY)),
     );
     timersRef.current.push(window.setTimeout(() => setIsAnimating(false), plan.length * ROW_DELAY));
@@ -492,8 +560,8 @@ function MapCanvas() {
 
   const handleRandom = useCallback(() => playPlan(createRandomPlan()), [playPlan]);
 
-  // Переигрывает то дерево, что сейчас на экране, — и случайное, и собранное кликами
-  const handleReplay = useCallback(() => playPlan(planFromTree(tree)), [playPlan, tree]);
+  // Переигрывает всю историю роста с ядра — и случайную, и собранную кликами
+  const handleReplay = useCallback(() => playPlan(tree.log), [playPlan, tree]);
 
   const handleReset = useCallback(() => {
     stopAnimation();
@@ -502,8 +570,8 @@ function MapCanvas() {
 
   const handleNodeClick = useCallback(
     (_: unknown, node: Node) => {
-      // Во время анимации клики блокируем: ручное раскрытие сдвинуло бы id и сломало план
-      if (isAnimating) return;
+      // Во время анимации клики блокируем: ручное раскрытие вмешалось бы в план
+      if (isAnimating || !canExpand(tree, node.id)) return;
       const clicked = tree.nodes[node.id];
       unlockAudio();
       playRow([{ pitch: clicked.pitch, depth: clicked.depth }]);
@@ -542,7 +610,7 @@ function MapCanvas() {
       <Controls showInteractive={false} />
       <Panel position="top-left">
         <div className={styles.stats}>
-          узлов: <b>{graph.nodes.length}</b>
+          узлов: <b>{graph.nodes.filter((node) => !node.data.exiting).length}</b>
           <br />
           глубина: <b>{depthMax}</b> / {MAX_DEPTH}
         </div>
@@ -555,7 +623,7 @@ function MapCanvas() {
         <button
           className={`${styles.btn} ${styles.btnGhost}`}
           onClick={handleReplay}
-          disabled={isAnimating || tree.nodes[ROOT_ID].children.length === 0}
+          disabled={isAnimating || tree.log.length === 0}
         >
           Переиграть
         </button>

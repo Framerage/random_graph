@@ -345,3 +345,16 @@ $font: 'JetBrains Mono', 'Fira Code', ui-monospace, Menlo, Consolas, monospace;
     box-shadow: none;
   }
 }
+// ===== Уходящий столбец скользящего окна =====
+// Гаснет плавно, пока растёт новый столбец справа. Если узел перемонтировался уже с этим классом,
+// перехода нет: он сразу невидим, без вспышки.
+.orbExit {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 500ms ease-out;
+}
+
+.edgeExit {
+  opacity: 0;
+  transition: opacity 500ms ease-out;
+}
