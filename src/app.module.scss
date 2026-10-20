@@ -358,3 +358,95 @@ $font: 'JetBrains Mono', 'Fira Code', ui-monospace, Menlo, Consolas, monospace;
   opacity: 0;
   transition: opacity 500ms ease-out;
 }
+
+// ===== Игра: зона попадания и ноты =====
+$hit: #3ddc84;
+
+// Зона в центре экрана: толстые рамки слева и справа, по строке на дорожку
+.zone {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  background: rgba($accent, 0.04);
+  border-left: 6px solid rgba($accent, 0.75);
+  border-right: 6px solid rgba($accent, 0.75);
+  box-shadow:
+    -8px 0 18px -8px rgba($accent, 0.5),
+    8px 0 18px -8px rgba($accent, 0.5);
+}
+
+.zoneLane {
+  position: relative;
+  flex: 1;
+
+  & + & {
+    border-top: 1px dashed rgba($accent, 0.15);
+  }
+}
+
+// Подпись клавиши слева от зоны, на уровне дорожки
+.zoneKey {
+  position: absolute;
+  top: 50%;
+  right: calc(100% + 14px);
+  transform: translateY(-50%);
+  font-size: 13px;
+  font-weight: 600;
+  color: $muted;
+}
+
+.zoneFlashHit,
+.zoneFlashMiss {
+  position: absolute;
+  inset: 0;
+  animation: zone-flash 250ms ease-out forwards;
+}
+
+.zoneFlashHit {
+  background: rgba($hit, 0.45);
+}
+
+.zoneFlashMiss {
+  background: rgba($alert, 0.4);
+}
+
+@keyframes zone-flash {
+  to {
+    opacity: 0;
+  }
+}
+
+// В игре ярко горят только ноты, остальное приглушено
+.flowGame .orb:not(.orbNote) {
+  color: $disabled;
+  border-color: $line;
+  box-shadow: none;
+}
+
+.flowGame .orbNote {
+  color: #fff;
+  border-color: $accent;
+  box-shadow: 0 0 10px rgba($accent, 0.5);
+}
+
+// Результат по ноте остаётся и после игры
+.orb.orbHit {
+  color: #fff;
+  border-color: $hit;
+  box-shadow: 0 0 12px rgba($hit, 0.6);
+}
+
+.orb.orbMiss {
+  color: $alert;
+  border-color: rgba($alert, 0.6);
+  box-shadow: none;
+}
+
+.statHit {
+  color: $hit !important;
+}

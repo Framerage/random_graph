@@ -12,6 +12,7 @@ import {
   ReactFlowProvider,
   getSmoothStepPath,
   useReactFlow,
+  useStore,
 } from '@xyflow/react';
 import type { Edge, EdgeProps, EdgeTypes, Node, NodeProps, NodeTypes } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
@@ -187,6 +188,11 @@ const MAX_DEPTH = 30;
 const VISIBLE_COLUMNS = 10;
 /** Сколько узлов помещается в один столбец. Дети появляются парами, поэтому раскрыть в столбце можно не больше двух узлов. */
 const MAX_PER_COLUMN = 4;
+/** Дорожки сверху вниз: у каждой своя клавиша. Узел столбца всегда стоит на одной из них. */
+const LANE_KEYS = ['W', 'A', 'S', 'D'];
+const LANE_CODES = ['KeyW', 'KeyA', 'KeyS', 'KeyD']; // e.code не зависит от раскладки
+/** Ядро стоит между дорожками A и S. */
+const ROOT_LANE = 1.5;
 
 /**
  * bornAt — момент появления узла (performance.now()), от него считается анимация роста ветки.
@@ -201,12 +207,14 @@ type Plan = PlanStep[][];
  * head — самый левый хранимый столбец по порядку сверху вниз. Его родителей уже нет в памяти,
  * поэтому порядок нельзя вывести из дерева и мы его запоминаем.
  * firstDepth — глубина первого видимого столбца. Столбец перед ним (если есть) — уходящий: он гаснет.
+ * headLanes — дорожки узлов head: их тоже нельзя вывести без родителей.
  * log — история раскрытий для «Переиграть». Ноды из неё не восстанавливаются, это только id: два шага на столбец.
  */
 type TreeState = {
   nodes: Record<string, TreeNode>;
   nextId: number;
   head: string[];
+  headLanes: number[];
   firstDepth: number;
   log: Plan;
 };
@@ -227,6 +235,7 @@ const createInitialTree = (): TreeState => ({
   nodes: { [ROOT_ID]: { id: ROOT_ID, depth: 0, children: [], bornAt: -Infinity, pitch: 0 } },
   nextId: 1,
   head: [ROOT_ID],
+  headLanes: [ROOT_LANE],
   firstDepth: 0,
   log: [],
 });
@@ -288,8 +297,9 @@ function shiftWindow(state: TreeState): TreeState {
   const kept = columns.slice(Math.max(firstDepth - 1 - headDepth, 0));
   const nodes: Record<string, TreeNode> = {};
   for (const id of kept.flat()) nodes[id] = state.nodes[id];
+  const lanes = treeLanes(state);
 
-  return { ...state, nodes, head: kept[0], firstDepth };
+  return { ...state, nodes, head: kept[0], headLanes: kept[0].map((id) => lanes[id]), firstDepth };
 }
 
 /** Случайное целое от min до max включительно. */
@@ -344,12 +354,19 @@ function treeReducer(state: TreeState, action: TreeAction): TreeState {
   }
 }
 
+/** Результат по ноте в игре. */
+type Judge = 'hit' | 'miss';
+
 /**
  * maxed — лист на максимальной глубине; blocked — лист, для детей которого нет места в следующем столбце;
  * exiting — узел уходящего столбца, он гаснет и при следующем сдвиге окна удаляется.
+ * note — нота игры: узел, от которого ветка идёт дальше (корень не в счёт); judge — попал по ней игрок или нет.
  */
 type OrbData = {
   label: string;
+  lane: number;
+  note: boolean;
+  judge?: Judge;
   leaf: boolean;
   root: boolean;
   maxed: boolean;
@@ -375,28 +392,55 @@ function treeColumns(tree: TreeState): string[][] {
   return columns;
 }
 
-/** Раскладка слева направо: столбец = уровень дерева, узлы столбца центрированы по вертикали. */
+/**
+ * Дорожка каждого узла. Полный столбец занимает все четыре дорожки по порядку.
+ * Столбец из двух узлов — это дети одного родителя: они встают на две соседние дорожки рядом с ним.
+ */
+function treeLanes(tree: TreeState): Record<string, number> {
+  const lanes: Record<string, number> = {};
+  tree.head.forEach((id, i) => (lanes[id] = tree.headLanes[i]));
+  const columns = treeColumns(tree);
+
+  for (let i = 1; i < columns.length; i++) {
+    const column = columns[i];
+    if (column.length === MAX_PER_COLUMN) {
+      column.forEach((id, lane) => (lanes[id] = lane));
+      continue;
+    }
+    const parent = columns[i - 1].find((id) => tree.nodes[id].children.length > 0)!;
+    const start = Math.min(Math.max(Math.round(lanes[parent] - 0.5), 0), MAX_PER_COLUMN - 2);
+    column.forEach((id, k) => (lanes[id] = start + k));
+  }
+  return lanes;
+}
+
+/** Раскладка слева направо: столбец = уровень дерева, по вертикали узел стоит на своей дорожке. */
 function buildGraph(tree: TreeState): { nodes: OrbNode[]; edges: GrowEdge[] } {
   const nodes: OrbNode[] = [];
   const edges: GrowEdge[] = [];
   const sizes = columnSizes(tree);
+  const lanes = treeLanes(tree);
 
   treeColumns(tree).forEach((column) =>
-    column.forEach((id, index) => {
+    column.forEach((id) => {
       const node = tree.nodes[id];
       const leaf = node.children.length === 0;
       const maxed = leaf && node.depth >= MAX_DEPTH;
       const exiting = node.depth < tree.firstDepth;
+      const root = id === ROOT_ID;
+      const lane = lanes[id];
       nodes.push({
         id,
         type: 'orb',
-        position: { x: node.depth * GAP_X, y: (index - (column.length - 1) / 2) * GAP_Y },
+        position: { x: node.depth * GAP_X, y: lane * GAP_Y },
         width: NODE_SIZE,
         height: NODE_SIZE,
         data: {
-          label: node.side ?? 'CORE',
+          label: root ? 'CORE' : LANE_KEYS[lane],
+          lane,
+          note: !root && !leaf,
           leaf,
-          root: id === ROOT_ID,
+          root,
           maxed,
           blocked: leaf && !maxed && !exiting && !canExpand(tree, id, sizes),
           exiting,
@@ -472,6 +516,9 @@ function OrbNodeView({ data }: NodeProps<OrbNode>) {
     data.leaf && styles.orbLeaf,
     data.root && styles.orbRoot,
     (data.maxed || data.blocked) && styles.orbMax,
+    data.note && styles.orbNote,
+    data.judge === 'hit' && styles.orbHit,
+    data.judge === 'miss' && styles.orbMiss,
     data.exiting && styles.orbExit,
   ]
     .filter(Boolean)
@@ -507,24 +554,125 @@ const nodeTypes: NodeTypes = { orb: OrbNodeView };
 const edgeTypes: EdgeTypes = { grow: GrowEdgeView };
 
 /* ========================================================================
+ * Игра: камера едет вправо, ноты проходят через зону попадания в центре экрана
+ * ===================================================================== */
+
+/** Через сколько столбцов после появления столбец доезжает до зоны. Новые столбцы появляются у правого края. */
+const LAG_COLUMNS = 5;
+/** Ширина зоны в координатах графа: нота засчитывается, пока её центр между рамками. */
+const ZONE_WIDTH = 86;
+/** Центр дорожек по вертикали в координатах графа — он держится в центре экрана. */
+const LANES_CENTER_Y = ((LANE_KEYS.length - 1) / 2) * GAP_Y + NODE_SIZE / 2;
+
+/** Где зона в координатах графа через t мс после старта: столбец d проходит её центр в (d + LAG_COLUMNS) * ROW_DELAY. */
+const zoneX = (t: number) => (t / ROW_DELAY - LAG_COLUMNS) * GAP_X + NODE_SIZE / 2;
+
+type Score = { hits: number; misses: number; wrong: number };
+const EMPTY_SCORE: Score = { hits: 0, misses: 0, wrong: 0 };
+/** Вспышка дорожки в зоне после нажатия; at нужен как key, чтобы анимация перезапускалась. */
+type Flash = { lane: number; ok: boolean; at: number };
+
+/* ========================================================================
  * Страница карты
  * ===================================================================== */
 
 function MapCanvas() {
   const [tree, dispatch] = useReducer(treeReducer, undefined, createInitialTree);
-  const { fitView } = useReactFlow();
+  const { fitView, setViewport } = useReactFlow();
   const graph = useMemo(() => buildGraph(tree), [tree]);
 
-  // После каждого изменения графа плавно вписываем в экран видимое окно (без уходящего столбца)
+  // Таймеры анимации Random и флаг, что она идёт (она же — игра)
+  const timersRef = useRef<number[]>([]);
+  const [isAnimating, setIsAnimating] = useState(false);
+
+  // Вне игры после каждого изменения графа плавно вписываем в экран видимое окно (без уходящего столбца).
+  // В игре камерой управляет цикл ниже.
   useEffect(() => {
+    if (isAnimating) return;
     const visible = graph.nodes.filter((node) => !node.data.exiting);
     const timer = setTimeout(() => fitView({ nodes: visible, duration: 300, padding: 0.25, maxZoom: 1.1 }), 40);
     return () => clearTimeout(timer);
-  }, [graph, fitView]);
+  }, [graph, fitView, isAnimating]);
 
-  // Таймеры анимации Random и флаг, что она идёт
-  const timersRef = useRef<number[]>([]);
-  const [isAnimating, setIsAnimating] = useState(false);
+  // Результаты по нотам. Ref — для обработчиков, стейт — для отрисовки.
+  const judgesRef = useRef<Record<string, Judge>>({});
+  const [judges, setJudges] = useState<Record<string, Judge>>({});
+  const [score, setScore] = useState<Score>(EMPTY_SCORE);
+  const [flash, setFlash] = useState<Flash | null>(null);
+  const gameStartRef = useRef(0);
+  const graphRef = useRef(graph);
+  useEffect(() => {
+    graphRef.current = graph;
+  }, [graph]);
+
+  const judgeNotes = useCallback((ids: string[], judge: Judge) => {
+    if (ids.length === 0) return;
+    // Заодно выкидываем результаты узлов, которые окно уже удалило: память не растёт
+    const alive = new Set(graphRef.current.nodes.map((node) => node.id));
+    const next: Record<string, Judge> = {};
+    for (const [id, value] of Object.entries(judgesRef.current)) if (alive.has(id)) next[id] = value;
+    for (const id of ids) next[id] = judge;
+    judgesRef.current = next;
+    setJudges(next);
+    setScore((s) => (judge === 'hit' ? { ...s, hits: s.hits + ids.length } : { ...s, misses: s.misses + ids.length }));
+  }, []);
+
+  const shownNodes = useMemo(
+    () =>
+      graph.nodes.map((node) => (judges[node.id] ? { ...node, data: { ...node.data, judge: judges[node.id] } } : node)),
+    [graph, judges],
+  );
+
+  // Масштаб в игре: по ширине помещается окно от зоны до нового столбца в обе стороны, по высоте — все дорожки
+  const width = useStore((s) => s.width);
+  const height = useStore((s) => s.height);
+  const gameZoom = Math.min(
+    width / ((2 * LAG_COLUMNS + 1) * GAP_X),
+    height / ((LANE_KEYS.length + 1.5) * GAP_Y),
+    1.2,
+  );
+
+  // Игровой цикл: каждый кадр двигаем камеру с постоянной скоростью и засчитываем промахи
+  // по нотам, которые уже проехали зону
+  useEffect(() => {
+    if (!isAnimating) return;
+    let frame = 0;
+    const tick = () => {
+      const x = zoneX(performance.now() - gameStartRef.current);
+      setViewport({ x: width / 2 - x * gameZoom, y: height / 2 - LANES_CENTER_Y * gameZoom, zoom: gameZoom });
+      const passed = graphRef.current.nodes.filter(
+        (node) =>
+          node.data.note && !judgesRef.current[node.id] && node.position.x + NODE_SIZE / 2 < x - ZONE_WIDTH / 2,
+      );
+      judgeNotes(passed.map((node) => node.id), 'miss');
+      frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [isAnimating, width, height, gameZoom, setViewport, judgeNotes]);
+
+  // Клавиши W A S D: попал, если на этой дорожке в зоне есть нота
+  useEffect(() => {
+    if (!isAnimating) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      const lane = LANE_CODES.indexOf(event.code);
+      if (lane < 0 || event.repeat) return;
+      event.preventDefault();
+      const x = zoneX(performance.now() - gameStartRef.current);
+      const target = graphRef.current.nodes.find(
+        (node) =>
+          node.data.note &&
+          node.data.lane === lane &&
+          !judgesRef.current[node.id] &&
+          Math.abs(node.position.x + NODE_SIZE / 2 - x) <= ZONE_WIDTH / 2,
+      );
+      if (target) judgeNotes([target.id], 'hit');
+      else setScore((s) => ({ ...s, wrong: s.wrong + 1 }));
+      setFlash({ lane, ok: Boolean(target), at: performance.now() });
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isAnimating, judgeNotes]);
 
   const stopAnimation = useCallback(() => {
     timersRef.current.forEach(clearTimeout);
@@ -535,28 +683,43 @@ function MapCanvas() {
   // Чистим таймеры при уходе со страницы
   useEffect(() => stopAnimation, [stopAnimation]);
 
-  /** Сбрасывает дерево и проигрывает план с нуля: анимация роста + звук. */
-  const playPlan = useCallback((plan: Plan) => {
-    stopAnimation();
-    dispatch({ type: 'reset' });
+  const resetScore = useCallback(() => {
+    judgesRef.current = {};
+    setJudges({});
+    setScore(EMPTY_SCORE);
+    setFlash(null);
+  }, []);
 
-    // План считается заранее, а столбцы дорисовываются по одному: ветки столбца растут
-    // ROW_DELAY мс, и как только они дотянулись до детей, начинает расти следующий столбец.
-    // Первый столбец тоже идёт через таймер, чтобы сброс успел отрисоваться отдельно
-    // и узлы с теми же id смонтировались заново (иначе анимация не запустится).
-    // План известен заранее — по нему раскладываем ноты по столбцам
-    const columns = soundColumns(plan);
-    unlockAudio();
-    setIsAnimating(true);
-    timersRef.current = plan.map((steps, index) =>
-      window.setTimeout(() => dispatch({ type: 'expandMany', steps, at: performance.now() }), index * ROW_DELAY),
-    );
-    // Узлы глубины d проявляются ровно в d * ROW_DELAY — в этот момент и звучит их столбец
-    columns.forEach((notes, depth) =>
-      timersRef.current.push(window.setTimeout(() => playRow(notes), depth * ROW_DELAY)),
-    );
-    timersRef.current.push(window.setTimeout(() => setIsAnimating(false), plan.length * ROW_DELAY));
-  }, [stopAnimation]);
+  /** Сбрасывает дерево и проигрывает план с нуля: рост, звук и игра. */
+  const playPlan = useCallback(
+    (plan: Plan) => {
+      stopAnimation();
+      resetScore();
+      dispatch({ type: 'reset' });
+
+      // План считается заранее, а столбцы дорисовываются по одному: ветки столбца растут
+      // ROW_DELAY мс, и как только они дотянулись до детей, начинает расти следующий столбец.
+      // Первый столбец тоже идёт через таймер, чтобы сброс успел отрисоваться отдельно
+      // и узлы с теми же id смонтировались заново (иначе анимация не запустится).
+      // План известен заранее — по нему раскладываем ноты по столбцам
+      const columns = soundColumns(plan);
+      unlockAudio();
+      gameStartRef.current = performance.now();
+      setIsAnimating(true);
+      timersRef.current = plan.map((steps, index) =>
+        window.setTimeout(() => dispatch({ type: 'expandMany', steps, at: performance.now() }), index * ROW_DELAY),
+      );
+      // Столбец d звучит, когда проходит центр зоны: музыка совпадает с моментом нажатия
+      columns.forEach((notes, depth) =>
+        timersRef.current.push(window.setTimeout(() => playRow(notes), (depth + LAG_COLUMNS) * ROW_DELAY)),
+      );
+      // Игра заканчивается, когда последний столбец проехал зону
+      timersRef.current.push(
+        window.setTimeout(() => setIsAnimating(false), (plan.length + LAG_COLUMNS + 1) * ROW_DELAY),
+      );
+    },
+    [stopAnimation, resetScore],
+  );
 
   const handleRandom = useCallback(() => playPlan(createRandomPlan()), [playPlan]);
 
@@ -565,12 +728,13 @@ function MapCanvas() {
 
   const handleReset = useCallback(() => {
     stopAnimation();
+    resetScore();
     dispatch({ type: 'reset' });
-  }, [stopAnimation]);
+  }, [stopAnimation, resetScore]);
 
   const handleNodeClick = useCallback(
     (_: unknown, node: Node) => {
-      // Во время анимации клики блокируем: ручное раскрытие вмешалось бы в план
+      // Во время игры клики блокируем: ручное раскрытие вмешалось бы в план
       if (isAnimating || !canExpand(tree, node.id)) return;
       const clicked = tree.nodes[node.id];
       unlockAudio();
@@ -588,12 +752,13 @@ function MapCanvas() {
   };
 
   const depthMax = Math.max(...Object.values(tree.nodes).map((n) => n.depth));
+  const played = score.hits + score.misses + score.wrong > 0;
 
   return (
     <ReactFlow
-      className={styles.flow}
+      className={`${styles.flow} ${isAnimating ? styles.flowGame : ''}`}
       colorMode="dark"
-      nodes={graph.nodes}
+      nodes={shownNodes}
       edges={graph.edges}
       nodeTypes={nodeTypes}
       edgeTypes={edgeTypes}
@@ -601,6 +766,9 @@ function MapCanvas() {
       nodesDraggable={false}
       nodesConnectable={false}
       elementsSelectable={false}
+      panOnDrag={!isAnimating}
+      zoomOnScroll={!isAnimating}
+      zoomOnDoubleClick={!isAnimating}
       minZoom={0.05}
       maxZoom={1.5}
       onlyRenderVisibleElements
@@ -608,17 +776,41 @@ function MapCanvas() {
     >
       <Background variant={BackgroundVariant.Dots} gap={28} size={1} color="#1c2638" />
       <Controls showInteractive={false} />
+
+      {isAnimating && (
+        <div
+          className={styles.zone}
+          style={{ width: ZONE_WIDTH * gameZoom, height: LANE_KEYS.length * GAP_Y * gameZoom }}
+        >
+          {LANE_KEYS.map((key, lane) => (
+            <div key={key} className={styles.zoneLane}>
+              <span className={styles.zoneKey}>{key}</span>
+              {flash?.lane === lane && (
+                <span key={flash.at} className={flash.ok ? styles.zoneFlashHit : styles.zoneFlashMiss} />
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
       <Panel position="top-left">
         <div className={styles.stats}>
           узлов: <b>{graph.nodes.filter((node) => !node.data.exiting).length}</b>
           <br />
           глубина: <b>{depthMax}</b> / {MAX_DEPTH}
+          {(isAnimating || played) && (
+            <>
+              <br />
+              попал: <b className={styles.statHit}>{score.hits}</b> · пропустил: <b>{score.misses}</b> · мимо:{' '}
+              <b>{score.wrong}</b>
+            </>
+          )}
         </div>
       </Panel>
       <Panel position="top-right" className={styles.panelActions}>
         {/* Повторное нажатие во время отрисовки начинает новое дерево */}
         <button className={styles.btn} onClick={handleRandom}>
-          {isAnimating ? 'Рисую...' : 'Random'}
+          {isAnimating ? 'Играю...' : 'Random'}
         </button>
         <button
           className={`${styles.btn} ${styles.btnGhost}`}
