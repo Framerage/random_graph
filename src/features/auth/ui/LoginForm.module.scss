@@ -1,0 +1,75 @@
+@use '@/shared/styles' as *;
+
+.card {
+  position: relative;
+  width: 100%;
+  max-width: 360px;
+  padding: 28px;
+  background: $panel;
+  border: 1px solid $line;
+  border-radius: $radius;
+
+  &::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 48px;
+    height: 2px;
+    background: $accent;
+  }
+}
+
+.brand {
+  @include brand;
+}
+
+.title {
+  margin: 0 0 22px;
+  font-family: $font-heading;
+  font-size: 22px;
+  font-weight: 600;
+  color: $text-h;
+}
+
+.field {
+  display: block;
+  margin-bottom: 14px;
+
+  span {
+    display: block;
+    margin-bottom: 6px;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: $muted;
+  }
+}
+
+.input {
+  width: 100%;
+  padding: 10px 12px;
+  font: inherit;
+  color: $text;
+  background: $bg;
+  border: 1px solid $line;
+  border-radius: 6px;
+  outline: none;
+  transition: border-color 0.15s;
+
+  &:focus {
+    border-color: $accent;
+  }
+}
+
+.error {
+  margin: 0 0 10px;
+  font-size: 13px;
+  color: $alert;
+}
+
+.hint {
+  margin: 16px 0 0;
+  font-size: 12px;
+  color: $muted;
+}

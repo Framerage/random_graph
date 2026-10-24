@@ -1,0 +1,60 @@
+@use '@/shared/styles' as *;
+
+// Зона в центре экрана: толстые рамки слева и справа, по строке на дорожку
+.zone {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  background: rgba($accent, 0.04);
+  border-left: 6px solid rgba($accent, 0.75);
+  border-right: 6px solid rgba($accent, 0.75);
+  box-shadow:
+    -8px 0 18px -8px rgba($accent, 0.5),
+    8px 0 18px -8px rgba($accent, 0.5);
+}
+
+.lane {
+  position: relative;
+  flex: 1;
+
+  & + & {
+    border-top: 1px dashed rgba($accent, 0.15);
+  }
+}
+
+// Подпись клавиши слева от зоны, на уровне дорожки
+.key {
+  position: absolute;
+  top: 50%;
+  right: calc(100% + 14px);
+  transform: translateY(-50%);
+  font-size: 13px;
+  font-weight: 600;
+  color: $muted;
+}
+
+.flashHit,
+.flashMiss {
+  position: absolute;
+  inset: 0;
+  animation: zone-flash 250ms ease-out forwards;
+}
+
+.flashHit {
+  background: rgba($hit, 0.45);
+}
+
+.flashMiss {
+  background: rgba($alert, 0.4);
+}
+
+@keyframes zone-flash {
+  to {
+    opacity: 0;
+  }
+}

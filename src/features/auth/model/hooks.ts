@@ -1,0 +1,37 @@
+import { useCallback } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { navigate } from '@/shared/lib';
+import { loginRequest } from '../api/loginRequest';
+import type { Credentials } from '../api/loginRequest';
+import { SESSION_QUERY_KEY } from '../config';
+import { readSession, writeSession } from './sessionStorage';
+
+export function useSession() {
+  return useQuery<string | null>({
+    queryKey: SESSION_QUERY_KEY,
+    queryFn: readSession,
+    initialData: readSession,
+    staleTime: Infinity,
+  });
+}
+
+export function useLogin() {
+  const queryClient = useQueryClient();
+  return useMutation<string, Error, Credentials>({
+    mutationFn: loginRequest,
+    onSuccess: (user) => {
+      writeSession(user);
+      queryClient.setQueryData(SESSION_QUERY_KEY, user);
+      navigate('/map');
+    },
+  });
+}
+
+export function useLogout() {
+  const queryClient = useQueryClient();
+  return useCallback(() => {
+    writeSession(null);
+    queryClient.setQueryData(SESSION_QUERY_KEY, null);
+    navigate('/login');
+  }, [queryClient]);
+}
