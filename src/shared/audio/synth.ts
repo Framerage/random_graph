@@ -41,6 +41,15 @@ export function unlockAudio() {
   if (c?.state === 'suspended') void c.resume();
 }
 
+/** Пауза: звучащие ноты замирают вместе с часами Web Audio и доигрывают после resumeAudio. */
+export function suspendAudio() {
+  if (ctx?.state === 'running') void ctx.suspend();
+}
+
+export function resumeAudio() {
+  if (ctx?.state === 'suspended') void ctx.resume();
+}
+
 export function setMuted(value: boolean) {
   muted = value;
 }

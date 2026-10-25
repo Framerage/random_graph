@@ -1,0 +1,25 @@
+// Путь с pathLength=1: штрих длиной 1 при смещении 1 скрыт целиком, при 0 — виден целиком
+.growEdge {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 0;
+  animation: edge-grow 1s ease-in-out backwards;
+}
+
+@keyframes edge-grow {
+  from {
+    stroke-dashoffset: 1;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+// Пауза игры: канвас помечен data-paused, растущая ветка замирает
+:global([data-paused]) .growEdge {
+  animation-play-state: paused;
+}
+
+.edgeExit {
+  opacity: 0;
+  transition: opacity 500ms ease-out;
+}
