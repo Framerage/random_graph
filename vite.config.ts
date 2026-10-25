@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import react from '@vitejs/plugin-react'
 import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vite'
@@ -11,4 +12,9 @@ export default defineConfig(({ command }) => ({
   },
   // GitHub Pages отдаёт сайт из подпапки /random_graph/; в dev остаёмся на корне
   base: command === 'build' ? '/random_graph/' : '/',
+  // Тесты лежат рядом с кодом; модель чистая, браузер не нужен
+  test: {
+    include: ['src/**/*.test.ts'],
+    environment: 'node',
+  },
 }))
