@@ -1,0 +1,44 @@
+@use '@/shared/styles' as *;
+
+.btn {
+  padding: 9px 16px;
+  font: inherit;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: $accent;
+  background: transparent;
+  border: 1px solid $accent-dim;
+  border-radius: 6px;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+
+  &:hover:not(:disabled) {
+    background: rgba($accent, 0.1);
+    border-color: $accent;
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+}
+
+.block {
+  width: 100%;
+  margin-top: 6px;
+  padding: 11px 16px;
+}
+
+.ghost {
+  color: $muted;
+  border-color: $line;
+
+  &:hover:not(:disabled) {
+    color: $text;
+    background: rgba(255, 255, 255, 0.04);
+    border-color: $muted;
+  }
+}

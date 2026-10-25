@@ -1,0 +1,33 @@
+@use '@/shared/styles' as *;
+
+// ===== Глобальная база =====
+:root {
+  font: 18px/145% $font;
+  letter-spacing: 0.18px;
+  color-scheme: dark;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background: $bg;
+  color: $text;
+}
+
+#root {
+  text-align: center;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}

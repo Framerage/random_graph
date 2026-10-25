@@ -1,0 +1,12 @@
+@use '@/shared/styles' as *;
+
+.login {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background:
+    linear-gradient(rgba($accent, 0.035) 1px, transparent 1px) 0 0 / 32px 32px,
+    linear-gradient(90deg, rgba($accent, 0.035) 1px, transparent 1px) 0 0 / 32px 32px,
+    $bg;
+}

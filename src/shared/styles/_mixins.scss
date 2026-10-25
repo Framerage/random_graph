@@ -1,0 +1,10 @@
+@use 'tokens' as *;
+
+// Подпись бренда: логин и шапка карты
+@mixin brand {
+  margin: 0 0 6px;
+  font-size: 12px;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: $accent;
+}
