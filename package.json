@@ -3,6 +3,10 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "engines": {
+    "node": ">=22.22.0",
+    "npm": "^11" 
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
@@ -10,7 +14,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "format": "prettier --write \"src/**/*.{ts,tsx,scss,css}\""
+    "format": "prettier --write \"src/**/*.{ts,tsx,scss,css}\"",
+    "engine": "npx --yes check-node-version --package"
   },
   "dependencies": {
     "react": "^19.2.8",
