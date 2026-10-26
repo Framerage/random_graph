@@ -1,17 +1,23 @@
 import { describe, expect, it } from 'vitest';
-import { GAP_X, NODE_SIZE, ZONE_WIDTH } from '../constants';
+import { LEVELS, NODE_SIZE } from '../constants';
 import type { OrbNode } from '../types';
 import { addJudges, applyJudges, noteInZone, passedNotes } from './judge';
+
+/** Шаг столбцов в тестах. */
+const GAP = 160;
 
 const orb = (id: string, depth: number, lane: number, note = true): OrbNode => ({
   id,
   type: 'orb',
-  position: { x: depth * GAP_X, y: 0 },
-  data: { label: '', lane, note, leaf: !note, root: false, maxed: false, blocked: false, exiting: false, bornAt: 0 },
+  position: { x: depth * GAP, y: 0 },
+  data: { label: '', lane, note, leaf: !note, root: false, maxed: false, blocked: false, exiting: false, bornAt: 0, rowDelay: 500 },
 });
 
 /** Центр столбца depth: в этот момент его ноты ровно в середине зоны. */
-const columnX = (depth: number) => depth * GAP_X + NODE_SIZE / 2;
+const columnX = (depth: number) => depth * GAP + NODE_SIZE / 2;
+
+/** Ширина зоны в тестах: уже шага столбцов, чтобы соседние столбцы в неё не попадали. */
+const WIDTH = 100;
 
 const a = orb('a', 0, 0);
 const b = orb('b', 2, 1);
@@ -20,26 +26,39 @@ const nodes = [a, b, leaf];
 
 describe('passedNotes', () => {
   it('ноты, чей центр левее зоны, кроме листьев и уже засчитанных', () => {
-    const x = columnX(0) + ZONE_WIDTH / 2 + 1;
-    expect(passedNotes(nodes, {}, x)).toEqual(['a']);
-    expect(passedNotes(nodes, { a: 'hit' }, x)).toEqual([]);
+    const x = columnX(0) + WIDTH / 2 + 1;
+    expect(passedNotes(nodes, {}, x, WIDTH)).toEqual(['a']);
+    expect(passedNotes(nodes, { a: 'hit' }, x, WIDTH)).toEqual([]);
   });
 
   it('нота на границе зоны ещё не пропущена', () => {
-    expect(passedNotes(nodes, {}, columnX(0) + ZONE_WIDTH / 2)).toEqual([]);
+    expect(passedNotes(nodes, {}, columnX(0) + WIDTH / 2, WIDTH)).toEqual([]);
+  });
+
+  it('в широкой зоне та же нота ещё не пропущена', () => {
+    expect(passedNotes(nodes, {}, columnX(0) + WIDTH / 2 + 1, WIDTH * 2)).toEqual([]);
   });
 });
 
 describe('noteInZone', () => {
   it('находит ноту своей дорожки в пределах зоны', () => {
-    expect(noteInZone(nodes, {}, 1, columnX(2))).toBe(b);
-    expect(noteInZone(nodes, {}, 1, columnX(2) + ZONE_WIDTH / 2)).toBe(b);
+    expect(noteInZone(nodes, {}, 1, columnX(2), WIDTH)).toBe(b);
+    expect(noteInZone(nodes, {}, 1, columnX(2) + WIDTH / 2, WIDTH)).toBe(b);
   });
 
   it('не находит чужую дорожку, ноту вне зоны и засчитанную', () => {
-    expect(noteInZone(nodes, {}, 0, columnX(2))).toBeUndefined();
-    expect(noteInZone(nodes, {}, 1, columnX(2) + ZONE_WIDTH / 2 + 1)).toBeUndefined();
-    expect(noteInZone(nodes, { b: 'miss' }, 1, columnX(2))).toBeUndefined();
+    expect(noteInZone(nodes, {}, 0, columnX(2), WIDTH)).toBeUndefined();
+    expect(noteInZone(nodes, {}, 1, columnX(2) + WIDTH / 2 + 1, WIDTH)).toBeUndefined();
+    expect(noteInZone(nodes, { b: 'miss' }, 1, columnX(2), WIDTH)).toBeUndefined();
+  });
+});
+
+describe('уровни', () => {
+  it('зона вмещает ноду и уже шага: в ней не бывает двух столбцов', () => {
+    for (const { zoneWidth, gapX } of LEVELS) {
+      expect(zoneWidth).toBeGreaterThan(NODE_SIZE);
+      expect(zoneWidth).toBeLessThan(gapX);
+    }
   });
 });
 

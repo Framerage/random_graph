@@ -1,13 +1,14 @@
-import { GAP_Y, LANE_KEYS, ZONE_WIDTH } from '../../constants';
+import { GAP_Y, LANE_KEYS } from '../../constants';
 import type { Flash } from '../../types';
 import styles from './HitZone.module.scss';
 
-type HitZoneProps = { zoom: number; flash: Flash | null };
+/** width — ширина зоны уровня в координатах графа. */
+type HitZoneProps = { width: number; zoom: number; flash: Flash | null };
 
 /** Зона попадания в центре экрана: по строке на дорожку, вспышка после нажатия. */
-export function HitZone({ zoom, flash }: HitZoneProps) {
+export function HitZone({ width, zoom, flash }: HitZoneProps) {
   return (
-    <div className={styles.zone} style={{ width: ZONE_WIDTH * zoom, height: LANE_KEYS.length * GAP_Y * zoom }}>
+    <div className={styles.zone} style={{ width: width * zoom, height: LANE_KEYS.length * GAP_Y * zoom }}>
       {LANE_KEYS.map((key, lane) => (
         <div key={key} className={styles.lane}>
           <span className={styles.key}>{key}</span>

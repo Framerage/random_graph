@@ -1,0 +1,52 @@
+@use '@/shared/styles' as *;
+
+// Затемняет канвас и ловит клики, чтобы под оверлеем ничего не нажималось
+.overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba($bg, 0.6);
+}
+
+.card {
+  min-width: 280px;
+  max-width: 420px;
+  padding: 24px 28px;
+  text-align: center;
+  background: $panel;
+  border: 1px solid $line;
+  border-radius: $radius;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+
+.titleWon,
+.titleLost {
+  margin: 0 0 8px;
+  font-family: $font-heading;
+  font-size: 22px;
+}
+
+.titleWon {
+  color: $hit;
+}
+
+.titleLost {
+  color: $alert;
+}
+
+.text {
+  margin: 0 0 20px;
+  font-size: 13px;
+  color: $muted;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+}

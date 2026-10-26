@@ -1,14 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import { GAP_X, GAP_Y, LANE_KEYS, ROOT_ID, ROOT_LANE } from '../constants';
+import { GAP_Y, LANE_KEYS, ROOT_ID, ROOT_LANE } from '../constants';
 import { buildGraph } from './buildGraph';
 import { createInitialTree, expandNode } from './tree';
 
+/** Шаг столбцов и темп в тестах. */
+const GAP_X = 160;
+const LAYOUT = { gapX: GAP_X, rowDelay: 500 };
+
 const grow = (ids: string[], at = 0) => ids.reduce((t, id) => expandNode(t, id, at), createInitialTree());
-const byId = (ids: string[]) => Object.fromEntries(buildGraph(grow(ids)).nodes.map((node) => [node.id, node]));
+const byId = (ids: string[]) =>
+  Object.fromEntries(buildGraph(grow(ids), LAYOUT).nodes.map((node) => [node.id, node]));
 
 describe('buildGraph', () => {
   it('ядро — CORE на средней линии, без рёбер', () => {
-    const { nodes, edges } = buildGraph(createInitialTree());
+    const { nodes, edges } = buildGraph(createInitialTree(), LAYOUT);
     expect(nodes).toHaveLength(1);
     expect(nodes[0].position).toEqual({ x: 0, y: ROOT_LANE * GAP_Y });
     expect(nodes[0].data).toMatchObject({ label: 'CORE', root: true, leaf: true, note: false });
@@ -36,8 +41,9 @@ describe('buildGraph', () => {
   });
 
   it('ребро на каждого ребёнка, с моментом его появления', () => {
-    const { edges } = buildGraph(grow([ROOT_ID], 42));
+    const { edges } = buildGraph(grow([ROOT_ID], 42), LAYOUT);
     expect(edges.map((edge) => edge.id)).toEqual([`e-${ROOT_ID}-n1`, `e-${ROOT_ID}-n2`]);
     expect(edges.every((edge) => edge.data?.bornAt === 42 && !edge.data.exiting)).toBe(true);
+    expect(edges.every((edge) => edge.data?.rowDelay === LAYOUT.rowDelay)).toBe(true);
   });
 });

@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Dispatch } from 'react';
 import { playRow, resumeAudio, suspendAudio, unlockAudio } from '@/shared/audio';
-import { LAG_COLUMNS, ROW_DELAY } from '../constants';
 import { now, pauseClock, resumeClock } from '../model/clock';
 import { soundColumns } from '../model/notes';
-import type { Plan, TreeAction } from '../types';
+import type { LevelConfig, Plan, TreeAction } from '../types';
 
 /** Отложенное действие игры: at — момент по игровым часам, timer — текущий setTimeout. */
 type Task = { at: number; fire: () => void; timer?: number };
@@ -37,13 +36,14 @@ export function usePlayback(dispatch: Dispatch<TreeAction>) {
   // Чистим таймеры при уходе со страницы
   useEffect(() => stop, [stop]);
 
+  /** Окно дерева, подготовку и темп берём из уровня; onEnd вызывается, когда план доиграл до конца сам, а не через stop. */
   const play = useCallback(
-    (plan: Plan) => {
+    (plan: Plan, { visibleColumns, lagColumns, rowDelay }: LevelConfig, onEnd?: () => void) => {
       stop();
-      dispatch({ type: 'reset' });
+      dispatch({ type: 'reset', visibleColumns });
 
       // План считается заранее, а столбцы дорисовываются по одному: ветки столбца растут
-      // ROW_DELAY мс, и как только они дотянулись до детей, начинает расти следующий столбец.
+      // rowDelay мс, и как только они дотянулись до детей, начинает расти следующий столбец.
       // Первый столбец тоже идёт через таймер, чтобы сброс успел отрисоваться отдельно
       // и узлы с теми же id смонтировались заново (иначе анимация не запустится).
       // План известен заранее — по нему раскладываем ноты по столбцам
@@ -64,12 +64,15 @@ export function usePlayback(dispatch: Dispatch<TreeAction>) {
         tasks.push(task);
       };
       plan.forEach((steps, index) =>
-        schedule(index * ROW_DELAY, () => dispatch({ type: 'expandMany', steps, at: now() })),
+        schedule(index * rowDelay, () => dispatch({ type: 'expandMany', steps, at: now() })),
       );
       // Столбец d звучит, когда проходит центр зоны: музыка совпадает с моментом нажатия
-      columns.forEach((notes, depth) => schedule((depth + LAG_COLUMNS) * ROW_DELAY, () => playRow(notes)));
+      columns.forEach((notes, depth) => schedule((depth + lagColumns) * rowDelay, () => playRow(notes)));
       // Игра заканчивается, когда последний столбец проехал зону
-      schedule((plan.length + LAG_COLUMNS + 1) * ROW_DELAY, () => setStartedAt(null));
+      schedule((plan.length + lagColumns + 1) * rowDelay, () => {
+        setStartedAt(null);
+        onEnd?.();
+      });
 
       tasksRef.current = tasks;
       tasks.forEach(arm);
@@ -77,20 +80,23 @@ export function usePlayback(dispatch: Dispatch<TreeAction>) {
     [stop, dispatch],
   );
 
-  /** Пауза и продолжение: стоят часы, расписание, звук и CSS-анимации (их гасит data-paused на канвасе). */
-  const togglePause = useCallback(() => {
-    if (startedAt === null) return;
-    if (isPaused) {
-      resumeClock();
-      resumeAudio();
-      tasksRef.current.forEach(arm);
-    } else {
-      tasksRef.current.forEach(disarm);
-      pauseClock();
-      suspendAudio();
-    }
-    setIsPaused(!isPaused);
+  /** Пауза: стоят часы, расписание, звук и CSS-анимации (их гасит data-paused на канвасе). */
+  const pause = useCallback(() => {
+    if (startedAt === null || isPaused) return;
+    tasksRef.current.forEach(disarm);
+    pauseClock();
+    suspendAudio();
+    setIsPaused(true);
   }, [startedAt, isPaused]);
 
-  return { startedAt, isPlaying: startedAt !== null, isPaused, play, stop, togglePause };
+  const togglePause = useCallback(() => {
+    if (startedAt === null) return;
+    if (!isPaused) return pause();
+    resumeClock();
+    resumeAudio();
+    tasksRef.current.forEach(arm);
+    setIsPaused(false);
+  }, [startedAt, isPaused, pause]);
+
+  return { startedAt, isPlaying: startedAt !== null, isPaused, play, stop, pause, togglePause };
 }

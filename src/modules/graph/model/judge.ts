@@ -1,4 +1,4 @@
-import { NODE_SIZE, ZONE_WIDTH } from '../constants';
+import { NODE_SIZE } from '../constants';
 import type { Judge, Judges, OrbNode } from '../types';
 
 /** Центр узла по горизонтали в координатах графа. */
@@ -6,15 +6,15 @@ const centerX = (node: OrbNode) => node.position.x + NODE_SIZE / 2;
 
 const isOpenNote = (node: OrbNode, judges: Judges) => node.data.note && !judges[node.id];
 
-/** id нот без результата, которые уже проехали зону с центром в x. */
-export function passedNotes(nodes: OrbNode[], judges: Judges, x: number): string[] {
-  return nodes.filter((node) => isOpenNote(node, judges) && centerX(node) < x - ZONE_WIDTH / 2).map((node) => node.id);
+/** id нот без результата, которые уже проехали зону шириной width с центром в x. */
+export function passedNotes(nodes: OrbNode[], judges: Judges, x: number, width: number): string[] {
+  return nodes.filter((node) => isOpenNote(node, judges) && centerX(node) < x - width / 2).map((node) => node.id);
 }
 
-/** Нота без результата на дорожке lane, которая сейчас в зоне с центром в x. */
-export function noteInZone(nodes: OrbNode[], judges: Judges, lane: number, x: number): OrbNode | undefined {
+/** Нота без результата на дорожке lane, которая сейчас в зоне шириной width с центром в x. */
+export function noteInZone(nodes: OrbNode[], judges: Judges, lane: number, x: number, width: number): OrbNode | undefined {
   return nodes.find(
-    (node) => isOpenNote(node, judges) && node.data.lane === lane && Math.abs(centerX(node) - x) <= ZONE_WIDTH / 2,
+    (node) => isOpenNote(node, judges) && node.data.lane === lane && Math.abs(centerX(node) - x) <= width / 2,
   );
 }
 
