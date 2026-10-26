@@ -107,12 +107,23 @@ describe('скользящее окно', () => {
     expect(tree.head.every((id) => tree.nodes[id].depth === minDepth)).toBe(true);
     expect(tree.headLanes).toHaveLength(tree.head.length);
   });
+
+  it('размер окна берётся из состояния', () => {
+    let small = createInitialTree(4);
+    let id = ROOT_ID;
+    for (let d = 0; d < 8; d++) {
+      small = expandNode(small, id, 0);
+      id = small.nodes[id].children[0];
+    }
+    expect(small.firstDepth).toBe(8 - 4 + 1);
+    expect(depths(small).size).toBe(4 + 1);
+  });
 });
 
 describe('treeReducer', () => {
-  it('reset возвращает к ядру', () => {
+  it('reset возвращает к ядру с заданным окном', () => {
     const { tree } = chain(3);
-    expect(treeReducer(tree, { type: 'reset' })).toEqual(createInitialTree());
+    expect(treeReducer(tree, { type: 'reset', visibleColumns: 6 })).toEqual(createInitialTree(6));
   });
 
   it('expandMany применяет шаги по порядку', () => {

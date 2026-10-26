@@ -1,10 +1,16 @@
-import { GAP_X, GAP_Y, LANE_KEYS, MAX_DEPTH, NODE_SIZE, ROOT_ID } from '../constants';
+import { GAP_Y, LANE_KEYS, MAX_DEPTH, NODE_SIZE, ROOT_ID } from '../constants';
 import { columnSizes, treeColumns, treeLanes } from './selectors';
 import { canExpand } from './tree';
-import type { GrowEdge, OrbNode, TreeState } from '../types';
+import type { GrowEdge, LevelConfig, OrbNode, TreeState } from '../types';
 
-/** Раскладка слева направо: столбец = уровень дерева, по вертикали узел стоит на своей дорожке. */
-export function buildGraph(tree: TreeState): { nodes: OrbNode[]; edges: GrowEdge[] } {
+/**
+ * Раскладка слева направо с шагом уровня: столбец = уровень дерева, по вертикали узел стоит на своей дорожке.
+ * Темп уровня уходит в данные узлов и рёбер — по нему идут анимации роста.
+ */
+export function buildGraph(
+  tree: TreeState,
+  { gapX, rowDelay }: Pick<LevelConfig, 'gapX' | 'rowDelay'>,
+): { nodes: OrbNode[]; edges: GrowEdge[] } {
   const nodes: OrbNode[] = [];
   const edges: GrowEdge[] = [];
   const sizes = columnSizes(tree);
@@ -21,7 +27,7 @@ export function buildGraph(tree: TreeState): { nodes: OrbNode[]; edges: GrowEdge
       nodes.push({
         id,
         type: 'orb',
-        position: { x: node.depth * GAP_X, y: lane * GAP_Y },
+        position: { x: node.depth * gapX, y: lane * GAP_Y },
         width: NODE_SIZE,
         height: NODE_SIZE,
         data: {
@@ -34,6 +40,7 @@ export function buildGraph(tree: TreeState): { nodes: OrbNode[]; edges: GrowEdge
           blocked: leaf && !maxed && !exiting && !canExpand(tree, id, sizes),
           exiting,
           bornAt: node.bornAt,
+          rowDelay,
         },
       });
     }),
@@ -46,7 +53,7 @@ export function buildGraph(tree: TreeState): { nodes: OrbNode[]; edges: GrowEdge
         source: node.id,
         target: childId,
         type: 'grow',
-        data: { bornAt: tree.nodes[childId].bornAt, exiting: node.depth < tree.firstDepth },
+        data: { bornAt: tree.nodes[childId].bornAt, exiting: node.depth < tree.firstDepth, rowDelay },
       });
     }
   }

@@ -2,13 +2,14 @@ import { MAX_DEPTH, MAX_PER_COLUMN, ROOT_ID, ROOT_LANE, VISIBLE_COLUMNS } from '
 import { columnSizes, treeColumns, treeLanes } from './selectors';
 import type { TreeAction, TreeNode, TreeState } from '../types';
 
-export const createInitialTree = (): TreeState => ({
+export const createInitialTree = (visibleColumns = VISIBLE_COLUMNS): TreeState => ({
   // Корень существовал «всегда» — его не анимируем
   nodes: { [ROOT_ID]: { id: ROOT_ID, depth: 0, children: [], bornAt: -Infinity, pitch: 0 } },
   nextId: 1,
   head: [ROOT_ID],
   headLanes: [ROOT_LANE],
   firstDepth: 0,
+  visibleColumns,
 });
 
 /** Можно ли раскрыть узел: это лист, глубина не максимальная и в следующем столбце есть место для двух детей. */
@@ -44,14 +45,14 @@ export function expandNode(state: TreeState, id: string, bornAt: number, childId
 }
 
 /**
- * Скользящее окно: если столбцов стало больше VISIBLE_COLUMNS, сдвигаем firstDepth.
+ * Скользящее окно: если столбцов стало больше visibleColumns, сдвигаем firstDepth.
  * Столбец перед окном остаётся как уходящий (он плавно гаснет), всё, что левее, удаляется.
- * Так в памяти не больше VISIBLE_COLUMNS + 1 столбца, то есть не больше 44 узлов.
+ * Так в памяти не больше visibleColumns + 1 столбца по MAX_PER_COLUMN узлов.
  */
 function shiftWindow(state: TreeState): TreeState {
   const columns = treeColumns(state);
   const lastDepth = state.nodes[columns[columns.length - 1][0]].depth;
-  const firstDepth = lastDepth - VISIBLE_COLUMNS + 1;
+  const firstDepth = lastDepth - state.visibleColumns + 1;
   if (firstDepth <= state.firstDepth) return state;
 
   const headDepth = state.nodes[state.head[0]].depth;
@@ -66,7 +67,7 @@ function shiftWindow(state: TreeState): TreeState {
 export function treeReducer(state: TreeState, action: TreeAction): TreeState {
   switch (action.type) {
     case 'reset':
-      return createInitialTree();
+      return createInitialTree(action.visibleColumns);
     case 'expand':
       return expandNode(state, action.id, action.at);
     case 'expandMany':

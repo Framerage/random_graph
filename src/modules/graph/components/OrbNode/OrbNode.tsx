@@ -1,14 +1,14 @@
 import { Handle, Position } from '@xyflow/react';
 import type { NodeProps } from '@xyflow/react';
 import { cx } from '@/shared/lib';
-import { NODE_APPEAR, ROW_DELAY } from '../../constants';
+import { NODE_APPEAR } from '../../constants';
 import type { OrbNode } from '../../types';
 import { useGrowStyle } from '../../hooks/useGrowStyle';
 import styles from './OrbNode.module.scss';
 
 export function OrbNodeView({ data }: NodeProps<OrbNode>) {
   // Узел проявляется, когда до него дотянулась ветка
-  const growStyle = useGrowStyle(data.bornAt, ROW_DELAY, NODE_APPEAR);
+  const growStyle = useGrowStyle(data.bornAt, data.rowDelay, NODE_APPEAR);
   const className = cx(
     styles.orb,
     styles.orbAppear,

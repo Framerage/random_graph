@@ -34,6 +34,14 @@
   }
 }
 
+// Справа сверху: кнопки, под ними статистика игрока
+.side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
 .actions {
   display: flex;
   gap: 8px;
